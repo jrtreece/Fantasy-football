@@ -11,7 +11,7 @@ FantasyCalc API: https://fantasycalc.com/api/values/current
 import requests
 from utils.cache import ttl_cache
 
-FANTASYCALC_BASE = "https://fantasycalc.com/api/values/current"
+FANTASYCALC_BASE = "https://api.fantasycalc.com/values/current"
 
 _HEADERS = {
     "User-Agent": (
@@ -40,7 +40,7 @@ def _fetch(num_qbs: int, dynasty: bool) -> list[dict]:
         "numQbs": num_qbs,
         "ppr": 1,
         "numTeams": 12,
-        "type": "dynasty" if dynasty else "redraft",
+        "isDynasty": "true" if dynasty else "false",
     }
     try:
         resp = requests.get(FANTASYCALC_BASE, params=params, headers=_HEADERS, timeout=15)
