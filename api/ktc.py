@@ -1,16 +1,17 @@
 """
-KeepTradeCut (KTC) player trade values.
-Fetches dynasty and redraft values from KTC's public data endpoint.
+Player trade values via FantasyCalc's public API.
+Replaces KTC which removed their public endpoint.
 
-KTC format values:
-  0 = Dynasty 1QB
-  1 = Dynasty Superflex
-  2 = Redraft
+FantasyCalc API: https://fantasycalc.com/api/values/current
+  numQbs=1  → 1QB league
+  numQbs=2  → Superflex league
+  ppr=1     → full PPR
+  numTeams  → league size (default 12)
 """
 import requests
 from utils.cache import ttl_cache
 
-KTC_BASE = "https://keeptradecut.com/api/players"
+FANTASYCALC_BASE = "https://fantasycalc.com/api/values/current"
 
 _HEADERS = {
     "User-Agent": (
@@ -18,48 +19,53 @@ _HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://keeptradecut.com/",
-    "Origin": "https://keeptradecut.com",
+    "Accept": "application/json",
 }
 
 
 @ttl_cache(ttl_seconds=3600)
 def get_dynasty_values(superflex: bool = False) -> list[dict]:
-    """Dynasty values. superflex=False → 1QB (format=0), superflex=True → SF (format=1)."""
-    fmt = 1 if superflex else 0
-    return _fetch_ktc(fmt)
+    """Dynasty player values. superflex=True for SF leagues."""
+    return _fetch(num_qbs=2 if superflex else 1, dynasty=True)
 
 
 @ttl_cache(ttl_seconds=3600)
 def get_redraft_values() -> list[dict]:
-    """Redraft values (format=2)."""
-    return _fetch_ktc(2)
+    """Redraft player values."""
+    return _fetch(num_qbs=1, dynasty=False)
 
 
-def _fetch_ktc(format_id: int) -> list[dict]:
-    url = f"{KTC_BASE}?format={format_id}"
+def _fetch(num_qbs: int, dynasty: bool) -> list[dict]:
+    params = {
+        "numQbs": num_qbs,
+        "ppr": 1,
+        "numTeams": 12,
+        "type": "dynasty" if dynasty else "redraft",
+    }
     try:
-        resp = requests.get(url, timeout=15, headers=_HEADERS)
+        resp = requests.get(FANTASYCALC_BASE, params=params, headers=_HEADERS, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         if not isinstance(data, list) or len(data) == 0:
-            raise ValueError(f"KTC returned unexpected data: {str(data)[:200]}")
+            raise ValueError(f"Unexpected response: {str(data)[:200]}")
         players = []
-        for p in data:
+        for entry in data:
+            p = entry.get("player", {})
+            name = p.get("name", "")
+            if not name:
+                continue
             players.append({
-                "name": p.get("playerName", ""),
-                "slug": p.get("slug", ""),
+                "name": name,
                 "position": p.get("position", ""),
-                "team": p.get("team", ""),
-                "value": p.get("value", 0),
-                "age": p.get("age"),
-                "rank": p.get("rank"),
+                "team": p.get("maybeTeam", ""),
+                "age": p.get("maybeAge"),
+                "value": entry.get("value", 0),
+                "rank": entry.get("overallRank"),
+                "sleeper_id": p.get("sleeperId"),
             })
-        return [p for p in players if p["name"]]
+        return players
     except Exception as e:
-        # Re-raise so callers can show a useful error instead of silent empty
-        raise RuntimeError(f"Failed to fetch KTC data (format={format_id}): {e}") from e
+        raise RuntimeError(f"Failed to fetch FantasyCalc data: {e}") from e
 
 
 def build_value_map(dynasty: bool = True, superflex: bool = False) -> dict[str, int]:
