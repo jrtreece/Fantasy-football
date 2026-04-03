@@ -8,15 +8,15 @@ from config import STARTER_SLOTS
 
 st.set_page_config(page_title="Trade Recommendations", page_icon="💡", layout="wide")
 st.title("💡 Trade Recommendations")
-st.caption("Based on your roster's needs and other teams' surpluses, here are realistic trades to target.")
+st.caption("Finds realistic trade targets based on your roster needs and other teams' depth.")
 
 platform = st.session_state.get("platform", "Sleeper")
 dynasty = st.session_state.get("dynasty", False)
 
-# ── Load all rosters ──────────────────────────────────────────────────────────
+
+# ── Data loaders ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner="Loading league rosters...")
-def load_all_rosters_sleeper(league_id: str, dynasty: bool) -> tuple[dict, dict]:
-    """Returns (roster_map, value_map)"""
+def load_all_rosters_sleeper(league_id: str, dynasty: bool) -> dict:
     from api.sleeper import build_roster_map, get_all_players
     from api.ktc import get_dynasty_values, get_redraft_values
 
@@ -26,7 +26,7 @@ def load_all_rosters_sleeper(league_id: str, dynasty: bool) -> tuple[dict, dict]
     value_map = {p["name"].lower(): p["value"] for p in value_data}
 
     rosters = {}
-    for roster_id, info in roster_map.items():
+    for info in roster_map.values():
         players = []
         for pid in (info.get("players") or []):
             p = all_players.get(pid, {})
@@ -34,55 +34,44 @@ def load_all_rosters_sleeper(league_id: str, dynasty: bool) -> tuple[dict, dict]
             pos = p.get("position", "")
             if not name or pos not in ("QB", "RB", "WR", "TE"):
                 continue
-            players.append({
-                "name": name,
-                "position": pos,
-                "value": value_map.get(name.lower(), 0),
-            })
+            players.append({"name": name, "position": pos, "value": value_map.get(name.lower(), 0)})
         rosters[info["owner"]] = players
-
-    return rosters, value_map
+    return rosters
 
 
 @st.cache_data(ttl=300, show_spinner="Loading league rosters...")
-def load_all_rosters_espn(league_id: int, year: int, espn_s2: str, swid: str, dynasty: bool) -> tuple[dict, dict]:
-    """Returns (roster_map, value_map)"""
+def load_all_rosters_espn(league_id: int, year: int, espn_s2: str, swid: str, dynasty: bool) -> dict:
     from api.espn import get_league, get_roster_players
     from api.ktc import build_value_map
 
     league = get_league(league_id=league_id, year=year, espn_s2=espn_s2, swid=swid)
     value_map = build_value_map(dynasty)
-
     rosters = {}
     for team in league.teams:
         players = []
         for p in get_roster_players(team):
             if p["position"] not in ("QB", "RB", "WR", "TE"):
                 continue
-            players.append({
-                "name": p["name"],
-                "position": p["position"],
-                "value": value_map.get(p["name"].lower(), 0),
-            })
+            players.append({"name": p["name"], "position": p["position"],
+                            "value": value_map.get(p["name"].lower(), 0)})
         rosters[team.team_name] = players
+    return rosters
 
-    return rosters, value_map
 
-
-# ── Fetch data based on platform ──────────────────────────────────────────────
+# ── Load rosters ──────────────────────────────────────────────────────────────
 try:
     if platform == "Sleeper":
         league_id = st.session_state.get("sleeper_league_id", "")
         if not league_id:
             st.warning("Enter your Sleeper League ID in the sidebar.")
             st.stop()
-        all_rosters, value_map = load_all_rosters_sleeper(league_id, dynasty)
+        all_rosters = load_all_rosters_sleeper(league_id, dynasty)
     else:
         league_id = st.session_state.get("espn_league_id", "")
         if not league_id:
             st.warning("Enter your ESPN League ID in the sidebar.")
             st.stop()
-        all_rosters, value_map = load_all_rosters_espn(
+        all_rosters = load_all_rosters_espn(
             int(league_id),
             st.session_state.get("espn_year", 2025),
             st.session_state.get("espn_s2", ""),
@@ -100,27 +89,24 @@ if not all_rosters:
     st.info("No roster data found.")
     st.stop()
 
-# ── Team selector ─────────────────────────────────────────────────────────────
-my_team = st.selectbox("Select your team", sorted(all_rosters.keys()))
-my_players = all_rosters.get(my_team, [])
+# ── Controls (always visible, auto-apply on change) ───────────────────────────
+col_team, col_results, col_fair = st.columns([2, 1, 1])
+with col_team:
+    my_team = st.selectbox("Your team", sorted(all_rosters.keys()))
+with col_results:
+    max_results = st.slider("# of results", 3, 20, 10)
+with col_fair:
+    fairness = st.slider("Fairness window %", 10, 70, 30,
+                         help="Max allowed value difference between players. Settings apply instantly.")
 
+st.divider()
+
+my_players = all_rosters.get(my_team, [])
 if not my_players:
     st.warning("No players found for this team.")
     st.stop()
 
-# ── Settings ──────────────────────────────────────────────────────────────────
-with st.expander("Settings"):
-    col1, col2 = st.columns(2)
-    with col1:
-        max_results = st.slider("Max recommendations", 3, 20, 10)
-    with col2:
-        fairness = st.slider(
-            "Fairness window (%)",
-            10, 50, 30,
-            help="How close in value the trade needs to be (lower = stricter)."
-        )
-
-# ── Generate recommendations ──────────────────────────────────────────────────
+# ── Generate (always runs, auto-widens until results found) ───────────────────
 with st.spinner("Analyzing all rosters..."):
     recs = generate_recommendations(
         my_team_name=my_team,
@@ -133,47 +119,44 @@ with st.spinner("Analyzing all rosters..."):
     )
 
 if not recs:
-    st.info(
-        "No strong trade recommendations found. This usually means your roster is "
-        "well-balanced or other teams don't have surplus at your weak positions. "
-        "Try widening the fairness window in Settings."
-    )
+    st.warning("Could not find any trades — this likely means player values failed to load. Check the Team Analysis page for errors.")
     st.stop()
 
-st.success(f"Found **{len(recs)}** trade opportunities")
+# Show effective fairness window if it was auto-widened
+actual_max_spread = max(1 - r["fairness_pct"] / 100 for r in recs)
+if actual_max_spread > fairness / 100 + 0.01:
+    st.info(f"Fairness window was automatically widened to {actual_max_spread*100:.0f}% to find results.")
 
-# ── Display recommendations ───────────────────────────────────────────────────
+st.success(f"**{len(recs)} trade opportunities** found for {my_team}")
+
+# ── Recommendation cards ──────────────────────────────────────────────────────
 for i, rec in enumerate(recs, 1):
-    verdict_color = "green" if rec["value_delta"] >= 0 else "orange"
-    sign = "+" if rec["value_delta"] >= 0 else ""
+    delta = rec["value_delta"]
+    sign = "+" if delta >= 0 else ""
+    delta_color = "green" if delta >= 0 else "orange"
+    upgrade_badge = "⬆️ Upgrades starter" if rec["upgrades_starter"] else "📦 Adds depth"
 
     with st.container(border=True):
-        col_num, col_main, col_vals = st.columns([0.5, 4, 2])
-
-        with col_num:
-            st.markdown(f"### #{i}")
-
-        with col_main:
+        top, bottom = st.columns([5, 1])
+        with top:
             st.markdown(
-                f"**Target:** {rec['partner']}  \n"
-                f"**Give:** {rec['give']} ({rec['give_position']})"
-                f" &nbsp;→&nbsp; "
-                f"**Get:** {rec['receive']} ({rec['receive_position']})"
+                f"**#{i} &nbsp; Target: {rec['partner']}**  \n"
+                f"Give &nbsp;**{rec['give']}** ({rec['give_position']}, {rec['give_value']:,}) "
+                f"&nbsp;→&nbsp; "
+                f"Get &nbsp;**{rec['receive']}** ({rec['receive_position']}, {rec['receive_value']:,})"
+                f"&nbsp; &nbsp;{upgrade_badge}"
             )
             st.caption(rec["reason"])
-
-        with col_vals:
-            st.metric(
-                "Value Delta",
-                f"{sign}{rec['value_delta']:,}",
-                delta=f"{sign}{rec['value_delta']:,}",
-            )
-            st.caption(f"Fairness: {rec['fairness_pct']}%")
+        with bottom:
+            st.metric("Delta", f"{sign}{delta:,}", delta=f"{sign}{delta:,}")
+            st.caption(f"Fair: {rec['fairness_pct']}%")
 
 # ── Summary table ─────────────────────────────────────────────────────────────
-st.subheader("All Recommendations at a Glance")
-df = pd.DataFrame(recs)[[
-    "partner", "give", "give_value", "receive", "receive_value", "value_delta", "fairness_pct", "my_need_filled"
-]]
-df.columns = ["Trade Partner", "You Give", "Give Value", "You Receive", "Receive Value", "Delta", "Fairness %", "Fills Need"]
-st.dataframe(df, use_container_width=True, hide_index=True)
+with st.expander("Full table"):
+    df = pd.DataFrame(recs)[[
+        "partner", "give", "give_value", "receive", "receive_value",
+        "value_delta", "fairness_pct", "upgrades_starter", "my_need_filled"
+    ]]
+    df.columns = ["Partner", "You Give", "Give Val", "You Get", "Get Val",
+                  "Delta", "Fairness %", "Upgrades Starter", "Position"]
+    st.dataframe(df, use_container_width=True, hide_index=True)
