@@ -1,4 +1,20 @@
 import streamlit as st
+import subprocess
+
+
+def get_build_version() -> str:
+    try:
+        commit_hash = subprocess.check_output(
+            ["git", "log", "-1", "--format=%h"], text=True
+        ).strip()
+        commit_date = subprocess.check_output(
+            ["git", "log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M UTC"],
+            text=True,
+        ).strip()
+        return f"v{commit_date} ({commit_hash})"
+    except Exception:
+        return "version unknown"
+
 
 st.set_page_config(
     page_title="Fantasy Football Edge",
@@ -92,3 +108,6 @@ with st.sidebar:
 
         league_type = st.radio("League Type", ["Redraft", "Dynasty"])
         st.session_state["dynasty"] = league_type == "Dynasty"
+
+    st.divider()
+    st.caption(get_build_version())
