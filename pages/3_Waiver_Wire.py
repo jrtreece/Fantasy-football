@@ -56,7 +56,11 @@ elif platform == "Sleeper":
         for roster in roster_map.values():
             rostered_ids.update(roster["players"])
 
-        value_data = get_dynasty_values() if dynasty else get_redraft_values()
+        try:
+            value_data = get_dynasty_values() if dynasty else get_redraft_values()
+        except RuntimeError as ktc_err:
+            st.error(f"Could not load KTC player values: {ktc_err}")
+            st.stop()
         value_map = {p["name"].lower(): p for p in value_data}
 
         for pid, p in all_players.items():
@@ -100,12 +104,13 @@ df = rank_waivers(filtered, team_weaknesses, top_n=50)
 if df.empty:
     st.info("No available players found.")
 else:
+    def highlight_need(row):
+        color = "background-color: #1a4a2e" if row["need_boost"] == "Yes" else ""
+        return [color] * len(row)
+
     st.dataframe(
-        df.style.apply(
-            lambda row: ["background-color: #d4edda" if row.get("need_boost") == "Yes" else "" for _ in row],
-            axis=1,
-        ),
+        df.style.apply(highlight_need, axis=1),
         use_container_width=True,
         hide_index=True,
     )
-    st.caption("Green rows = fills one of your weak positions.")
+    st.caption("Highlighted rows fill one of your weak positions.")

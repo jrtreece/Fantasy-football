@@ -48,18 +48,28 @@ elif platform == "Sleeper":
         st.stop()
 
     st.info(
-        "Sleeper does not provide weekly projections via their public API. "
-        "Projections below are set to 0. For best results, use ESPN which includes projections."
+        "Sleeper's public API does not include weekly projections. "
+        "Starters are shown based on your current lineup set in the Sleeper app. "
+        "KTC dynasty values are used as a proxy for player quality."
     )
     try:
         from api.sleeper import build_roster_map, get_all_players
+        from api.ktc import get_dynasty_values, get_redraft_values
         roster_map = build_roster_map(league_id)
         all_players = get_all_players()
+
+        try:
+            value_data = get_dynasty_values() if dynasty else get_redraft_values()
+        except RuntimeError as ktc_err:
+            st.error(f"Could not load KTC player values: {ktc_err}")
+            st.stop()
+        value_map = {p["name"].lower(): p.get("value", 0) for p in value_data}
 
         owner_options = {v["owner"]: k for k, v in roster_map.items()}
         selected_owner = st.selectbox("Select your team", list(owner_options.keys()))
         roster_id = owner_options[selected_owner]
         player_ids = roster_map[roster_id]["players"]
+        starter_ids = set(roster_map[roster_id].get("starters") or [])
 
         for pid in player_ids:
             p = all_players.get(pid, {})
@@ -67,7 +77,15 @@ elif platform == "Sleeper":
             pos = p.get("position", "")
             if not name or not pos:
                 continue
-            roster.append({"name": name, "position": pos, "projected_points": 0})
+            ktc_value = value_map.get(name.lower(), 0)
+            roster.append({
+                "name": name,
+                "position": pos,
+                # Use KTC value as proxy for projected points so optimizer works
+                "projected_points": ktc_value / 500,
+                "ktc_value": ktc_value,
+                "currently_starting": pid in starter_ids,
+            })
     except Exception as e:
         st.error(f"Error loading Sleeper data: {e}")
         st.stop()
@@ -95,18 +113,43 @@ if result["recommendations"]:
 else:
     st.success("Your lineup looks optimal!")
 
-st.metric("Total Projected Points", result["total_projected"])
+if platform == "ESPN":
+    st.metric("Total Projected Points", result["total_projected"])
 
 # ── Starters table ────────────────────────────────────────────────────────────
 st.subheader("Optimal Starters")
 if result["starters"]:
-    starters_df = pd.DataFrame(result["starters"])[["slot", "name", "position", "projected_points"]]
-    starters_df.columns = ["Slot", "Player", "Position", "Proj. Pts"]
+    starters_df = pd.DataFrame(result["starters"])
+    display_cols = ["slot", "name", "position"]
+    col_labels = ["Slot", "Player", "Position"]
+    if platform == "ESPN":
+        display_cols.append("projected_points")
+        col_labels.append("Proj. Pts")
+    if "ktc_value" in starters_df.columns:
+        display_cols.append("ktc_value")
+        col_labels.append("KTC Value")
+    if "currently_starting" in starters_df.columns:
+        display_cols.append("currently_starting")
+        col_labels.append("In Sleeper Lineup")
+    starters_df = starters_df[display_cols]
+    starters_df.columns = col_labels
     st.dataframe(starters_df, use_container_width=True, hide_index=True)
 
 # ── Bench table ───────────────────────────────────────────────────────────────
 st.subheader("Bench")
 if result["bench"]:
-    bench_df = pd.DataFrame(result["bench"])[["name", "position", "projected_points"]]
-    bench_df.columns = ["Player", "Position", "Proj. Pts"]
+    bench_df = pd.DataFrame(result["bench"])
+    display_cols = ["name", "position"]
+    col_labels = ["Player", "Position"]
+    if platform == "ESPN":
+        display_cols.append("projected_points")
+        col_labels.append("Proj. Pts")
+    if "ktc_value" in bench_df.columns:
+        display_cols.append("ktc_value")
+        col_labels.append("KTC Value")
+    if "currently_starting" in bench_df.columns:
+        display_cols.append("currently_starting")
+        col_labels.append("In Sleeper Lineup")
+    bench_df = bench_df[display_cols]
+    bench_df.columns = col_labels
     st.dataframe(bench_df, use_container_width=True, hide_index=True)

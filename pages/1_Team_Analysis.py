@@ -31,7 +31,11 @@ if platform == "Sleeper":
         roster_id = owner_options[selected_owner]
         player_ids = roster_map[roster_id]["players"]
 
-        value_data = get_dynasty_values() if dynasty else get_redraft_values()
+        try:
+            value_data = get_dynasty_values() if dynasty else get_redraft_values()
+        except RuntimeError as ktc_err:
+            st.error(f"Could not load KTC player values: {ktc_err}")
+            st.stop()
         value_map = {p["name"].lower(): p for p in value_data}
 
         for pid in player_ids:
